@@ -192,19 +192,25 @@ m.shader_def = {
             return _format('%s = dot(%s, %s)', namea, nameb, namec)
         end
     end,
-    ['[d]?mov(.*)'] = function(op_args, a, b)
-        if op_args._sat then
-            return _format('%s = saturate(%s)', get_var_name(a), get_var_name(b, a))
-        else
-            return _format('%s = %s', get_var_name(a), get_var_name(b, a))
-        end
-    end,
     ['[d]?movc'] = function(op_args, dest, cond, a, b)
         local n_dest= get_var_name(dest)
         local n_cond = get_var_name(cond, dest)
         local n_a = get_var_name(a, dest)
         local n_b = get_var_name(b, dest)
         return _format('%s = %s ? %s : %s', n_dest, n_cond, n_a, n_b)
+    end,
+    ['[d]?movc_sat'] = function(op_args, dest, cond, a, b)
+        local n_dest= get_var_name(dest)
+        local n_cond = get_var_name(cond, dest)
+        local n_a = get_var_name(a, dest)
+        local n_b = get_var_name(b, dest)
+        return _format('%s = saturate(%s ? %s : %s)', n_dest, n_cond, n_a, n_b)
+    end,
+    ['[d]?mov'] = function(op_args, a, b)
+        return _format('%s = %s', get_var_name(a), get_var_name(b, a))
+    end,
+    ['[d]?mov_sat'] = function(op_args, a, b)
+        return _format('%s = saturate(%s)', get_var_name(a), get_var_name(b, a))
     end,
     ['[di]?add(.*)'] = function(op_args, a, b, c)
         local namea = get_var_name(a)
@@ -222,7 +228,7 @@ m.shader_def = {
             return _format('%s = %s', namea, ret)
         end
     end,
-    ['[uid]?mul(.*)'] = function(op_args, a, b, c)
+    ['mul(.*)'] = function(op_args, a, b, c)
         local namea = get_var_name(a)
         local nameb = get_var_name(b, a)
         local namec = get_var_name(c, a)
@@ -230,6 +236,17 @@ m.shader_def = {
             return _format('%s = saturate(%s * %s)', namea, nameb, namec)
         else
             return _format('%s = %s * %s', namea, nameb, namec)
+        end
+    end,
+    ['[uid]mul(.*)'] = function(op_args, a, b, c, d)
+        local namea = get_var_name(a)
+        local nameb = get_var_name(b, a)
+        local namec = get_var_name(c, a)
+        local named = get_var_name(d, a)
+        if op_args._sat then
+            return _format('%s = saturate(%s * %s)', namea, nameb, namec)
+        else
+            return _format('%s %s = %s * %s', namea, nameb, namec, named)
         end
     end,
     ['[uid]?min'] = function(op_args, a, b, c)
@@ -266,8 +283,8 @@ m.shader_def = {
         local n_addr, com_addr = get_var_name(addr, nil, true)
         local n_texture, com_texture = get_var_name(texture, dest, true)
         local n_sampler = get_var_name(sampler)
-        return _format('%s = tex2D(%s, %s.%s).%s //sample_state %s',
-                    n_dest, n_texture, n_addr, com_addr:sub(1, 2), com_texture, n_sampler)
+        return _format('%s = %s.Sample(%s, %s.%s).%s // sample or sample_b or sample_c or sample_c_lz or sample_d or sample_l',
+                    n_dest, n_texture, n_sampler, n_addr, com_addr, com_texture)
     end,
     ['ld_indexable.*'] = function(op_args, dest, addr, texture)
         -- load texture data
@@ -275,10 +292,9 @@ m.shader_def = {
         local n_dest = get_var_name(dest)
         local n_addr, com_addr = get_var_name(addr, nil, true)
         local n_texture, com_texture = get_var_name(texture, dest, true)
-        return _format('%s = tex2D(%s, %s.%s).%s //ld_indexable',
-                    n_dest, n_texture, n_addr, com_addr:sub(1, 2), com_texture)
+        return _format('%s = %s.Load(%s.%s).%s // ld_indexable',
+                    n_dest, n_texture, n_addr, com_addr, com_texture)
     end,
-
     ['[ui]?mad(.*)'] = function(op_args, a, b, c, d)
         local namea = get_var_name(a)
         local nameb = get_var_name(b, a)
@@ -291,9 +307,9 @@ m.shader_def = {
             ret = _format('%s + %s', namec, named)
         end
         if op_args._sat then
-            return _format('%s = saturate(%s*%s)', namea, nameb, ret)
+            return _format('%s = saturate(%s * %s)', namea, nameb, ret)
         else
-            return _format('%s = %s*%s', namea, nameb, ret)
+            return _format('%s = %s * %s', namea, nameb, ret)
         end
     end,
     ['[du]?div(.*)'] = function(op_args, a, b, c)
@@ -301,9 +317,9 @@ m.shader_def = {
         local nameb = get_var_name(b, a)
         local namec = get_var_name(c, a)
         if op_args._sat then
-            return _format('%s = saturate(%s/%s)', namea, nameb, namec)
+            return _format('%s = saturate(%s / %s)', namea, nameb, namec)
         else
-            return _format('%s = %s/%s', namea, nameb, namec)
+            return _format('%s = %s / %s', namea, nameb, namec)
         end
     end,
     ['deriv_rt(.)(.*)'] = function(op_args, a, b)
@@ -479,7 +495,7 @@ m.shader_def = {
         local namec = get_var_name(c, a)
         local comment = ''
         if namec:find('0x3f800000') then
-            comment = _format('// 0x3f800000=1.0, maybe means: if (%s==0xFFFFFFFF) %s=1.0', nameb, namea)
+            comment = _format('// 0x3f800000=1.0, maybe means: %s=step(%s,x) or step(x,%s)', namea, nameb, nameb)
         end
         return _format('%s = %s & %s %s', namea, nameb, namec, comment)
     end,
@@ -514,16 +530,50 @@ m.shader_def = {
 
 -- sm5
 m.shader_def5 = {
-    bfi = function(op_args, width, offset, src2, src3)
-        return _format([[
-            bitmask = (((1 << %s)-1) << %s) & 0xffffffff
-            dest = ((%s << %s) & bitmask) | (%s & ~bitmask)]], width, offset, src2, offset, src3)
+    bfi = function(op_args, a, b, c, d, e)
+        local namea = get_var_name(a)
+        local nameb = get_var_name(b)
+        local namec = get_var_name(c)
+        local named = get_var_name(d)
+        local namee = get_var_name(e)
+        return _format('%s = bfi(%s, %s, %s, %s)) //bfi', namea, nameb, namec, named, namee)
     end,
     bfrev = function(op_args, dest, src)
         return _format('%s = reverse_bit(%s) ', dest, src)
     end,
     countbits = function(op_args, dest, src)
         return _format('%s = countbits(%s)', dest, src)
+    end,
+    f16tof32 = function(op_args, a, b)
+        local namea = get_var_name(a)
+        local nameb = get_var_name(b)
+        return _format('%s = float(%s) //f16tof32', namea, nameb)
+    end,
+    ['[uid]?bfe'] = function(op_args, a, b, c, d)
+        local namea = get_var_name(a)
+        local nameb = get_var_name(b)
+        local namec = get_var_name(c)
+        local named = get_var_name(d)
+        return _format('%s = ubfe(%s, %s, %s) = %s.%sto(%s+%s-1) //bfe', namea, nameb, namec, named, named, namec, namec, nameb)
+    end,
+    ['gather4.*'] = function(op_args, dest, addr, texture, sampler)
+        -- gathers the four texels that would be used in a bi-linear filtering operation
+        --  dest = gather[addr]
+        local n_dest = get_var_name(dest)
+        local n_addr, com_addr = get_var_name(addr, nil, true)
+        local n_texture, com_texture = get_var_name(texture, dest, true)
+        local n_sampler = get_var_name(sampler)
+        return _format('%s = %s.Gather(%s, %s.%s).%s // gather4',
+                    n_dest, n_texture, n_sampler, n_addr, com_addr, com_texture)
+    end,
+    ['ld_raw_indexable.*'] = function(op_args, dest, addr, buffer)
+        -- load raw buffer data
+        --  dest = raw[addr]
+        local n_dest = get_var_name(dest)
+        local n_addr, com_addr = get_var_name(addr, nil, true)
+        local n_buffer, com_buffer = get_var_name(buffer, dest, true)
+        return _format('%s = %s.Load(%s.%s).%s // ld_raw_indexable',
+                    n_dest, n_buffer, n_addr, com_addr, com_buffer)
     end,
 }
 
@@ -548,8 +598,8 @@ m.shader_def_cs = {
         local n_addr, com_addr = get_var_name(addr, nil, true)
         local n_offset, com_offset = get_var_name(offset, nil, true)
         local n_texture, com_texture = get_var_name(texture, dest, true)
-        return _format('%s = %s[%s.%s][%s].%s //ld_structured',
-                    n_dest, n_texture, n_addr, com_addr:sub(1, 2), n_offset, com_texture)
+        return _format('%s = %s[%s.%s][%s.%s].%s //ld_structured',
+                    n_dest, n_texture, n_addr, com_addr:sub(1, 2), n_offset, com_offset, com_texture)
     end,
     ['store_structured'] = function(op_args, a, b, c, d)
         local namea, a_com = get_var_name(a, nil, true)
@@ -559,6 +609,12 @@ m.shader_def_cs = {
         return _format('%s[%s][%s].%s = %s // store_structured', namea, nameb, namec, a_com, named)
     end,
     ['store_uav_typed'] = function(op_args, a, b, c)
+        local namea = get_var_name(a)
+        local nameb = get_var_name(b)
+        local namec = get_var_name(c)
+        return _format('%s[%s] = %s', namea, nameb, namec)
+    end,
+    ['store_raw'] = function(op_args, a, b, c)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
         local namec = get_var_name(c)
